@@ -18,6 +18,9 @@ export interface ActivityRendererProps<TConfig = Record<string, unknown>> {
   onInteraction: (interaction: Omit<UserInteraction, 'interaction_id' | 'timestamp_ms'>) => void;
   onSubmit: (rawPayload: Record<string, unknown>) => void;
   onPauseToggle?: () => void;
+  onBackStep?: () => void;
+  onStepChange?: (stepIndex: number, totalSteps: number) => void;
+  onExit?: () => void;
   isSubmitting?: boolean;
 }
 

@@ -168,8 +168,8 @@ export const TherapeuticProvider: React.FC<{ children: ReactNode }> = ({ childre
     if (nextActivityRef && nextStageId) {
       startActivitySession(nextStageId, nextActivityRef.activity_id);
     } else {
-      // Pathway Completed!
-      alert('Congratulations! You have completed all stages of this therapeutic pathway!');
+      // Pathway Completed (UI-level feedback)
+      console.log('[Therapeutic Pathway] Completed all stages of this pathway in current session.');
     }
   };
 

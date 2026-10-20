@@ -31,10 +31,13 @@ export const FineMotorTraceActivityComponent: React.FC<ActivityRendererProps<OTT
   const [deviationScore, setDeviationScore] = useState(100);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
+  // Stage: 'tracing' | 'results'
+  const [stage, setStage] = useState<'tracing' | 'results'>('tracing');
+
   // Generate reference path coordinates (wave)
   const getGuidePath = (width: number, height: number) => {
     const points: { x: number; y: number }[] = [];
-    const padding = 40;
+    const padding = 44;
     const usableW = width - padding * 2;
     const centerY = height / 2;
 
@@ -47,10 +50,13 @@ export const FineMotorTraceActivityComponent: React.FC<ActivityRendererProps<OTT
   };
 
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    const rect = canvasRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
 
     setIsTracing(true);
     setTracedPoints([{ x, y }]);
@@ -63,24 +69,26 @@ export const FineMotorTraceActivityComponent: React.FC<ActivityRendererProps<OTT
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!isTracing) return;
-    const rect = canvasRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
 
     setTracedPoints((prev) => {
       const newPoints = [...prev, { x, y }];
-      if (canvasRef.current) {
-        const guide = getGuidePath(canvasRef.current.width, canvasRef.current.height);
-        let minDistanceSum = 0;
-        newPoints.forEach((p) => {
-          const closest = Math.min(...guide.map((g) => Math.hypot(g.x - p.x, g.y - p.y)));
-          minDistanceSum += closest;
-        });
-        const avgDev = minDistanceSum / newPoints.length;
-        const accuracy = Math.max(0, Math.min(100, Math.round(100 - avgDev * 1.8)));
-        setDeviationScore(accuracy);
-      }
+      const guide = getGuidePath(canvas.width, canvas.height);
+      let minDistanceSum = 0;
+      newPoints.forEach((p) => {
+        const closest = Math.min(...guide.map((g) => Math.hypot(g.x - p.x, g.y - p.y)));
+        minDistanceSum += closest;
+      });
+      const avgDev = minDistanceSum / newPoints.length;
+      // Convert average deviation in px to a friendly score
+      const accuracy = Math.max(0, Math.min(100, Math.round(100 - avgDev * 1.8)));
+      setDeviationScore(accuracy);
       return newPoints;
     });
 
@@ -103,9 +111,29 @@ export const FineMotorTraceActivityComponent: React.FC<ActivityRendererProps<OTT
   const handleReset = () => {
     setTracedPoints([]);
     setDeviationScore(100);
+    setStage('tracing');
+    onInteraction({
+      type: 'prompt_viewed',
+      payload: { action: 'try_again_reset' }
+    });
   };
 
-  const handleSubmit = () => {
+  // Submitting transitions to internal dedicated results screen first
+  const handleShowResults = () => {
+    if (isTracing) setIsTracing(false);
+    setStage('results');
+    onInteraction({
+      type: 'prompt_viewed',
+      payload: {
+        stage: 'results',
+        total_points: tracedPoints.length,
+        accuracy_percent: deviationScore
+      }
+    });
+  };
+
+  // Final submit returns to dashboard
+  const handleFinishAndReturn = () => {
     onSubmit({
       traced_point_count: tracedPoints.length,
       accuracy_percent: deviationScore,
@@ -114,7 +142,7 @@ export const FineMotorTraceActivityComponent: React.FC<ActivityRendererProps<OTT
     });
   };
 
-  // Canvas Drawing Render Loop (Light Theme Colors)
+  // Canvas Drawing Render Loop (Light Theme Colors with Start and Finish Markers)
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -123,8 +151,11 @@ export const FineMotorTraceActivityComponent: React.FC<ActivityRendererProps<OTT
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Draw Guide Path Background (Soft sky pastel)
     const guide = getGuidePath(canvas.width, canvas.height);
+    const startPoint = guide[0];
+    const finishPoint = guide[guide.length - 1];
+
+    // 1. Draw Guide Path Background (Soft sky pastel)
     ctx.beginPath();
     ctx.strokeStyle = '#e0f2fe';
     ctx.lineWidth = config.line_thickness_px * 2;
@@ -137,11 +168,11 @@ export const FineMotorTraceActivityComponent: React.FC<ActivityRendererProps<OTT
     });
     ctx.stroke();
 
-    // Draw Center Guide Line (Sky blue)
+    // 2. Draw Center Dashed Guide Line (Sky blue)
     ctx.beginPath();
     ctx.strokeStyle = '#0284c7';
     ctx.lineWidth = 3;
-    ctx.setLineDash([6, 6]);
+    ctx.setLineDash([8, 8]);
     guide.forEach((p, idx) => {
       if (idx === 0) ctx.moveTo(p.x, p.y);
       else ctx.lineTo(p.x, p.y);
@@ -149,10 +180,10 @@ export const FineMotorTraceActivityComponent: React.FC<ActivityRendererProps<OTT
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // Draw User Traced Line
+    // 3. Draw User Traced Line
     if (tracedPoints.length > 0) {
       ctx.beginPath();
-      ctx.strokeStyle = deviationScore > 75 ? '#10b981' : '#f43f5e';
+      ctx.strokeStyle = deviationScore > 75 ? '#059669' : '#e11d48';
       ctx.lineWidth = 6;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
@@ -162,76 +193,236 @@ export const FineMotorTraceActivityComponent: React.FC<ActivityRendererProps<OTT
       });
       ctx.stroke();
     }
+
+    // 4. Draw Start Marker (Green circle with "START")
+    ctx.beginPath();
+    ctx.fillStyle = '#10b981';
+    ctx.arc(startPoint.x, startPoint.y, 14, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    ctx.font = 'bold 9px sans-serif';
+    ctx.fillStyle = '#065f46';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('START', startPoint.x, startPoint.y + 24);
+
+    // 5. Draw Finish Marker (Purple circle with "FINISH" / Flag)
+    ctx.beginPath();
+    ctx.fillStyle = '#8b5cf6';
+    ctx.arc(finishPoint.x, finishPoint.y, 14, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    ctx.font = 'bold 9px sans-serif';
+    ctx.fillStyle = '#5b21b6';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('FINISH', finishPoint.x, finishPoint.y + 24);
+
   }, [tracedPoints, deviationScore, config]);
 
+  const hasTracedEnough = tracedPoints.length >= config.min_completion_points;
+
   return (
-    <div className="bg-white border-2 border-sky-200 rounded-3xl p-6 shadow-md text-slate-800 max-w-2xl mx-auto space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+    <div className="bg-white border border-slate-200/80 rounded-2xl sm:rounded-3xl p-4 sm:p-6 md:p-8 shadow-sm text-slate-800 max-w-2xl mx-auto space-y-5 sm:space-y-6 relative overflow-hidden">
+      {/* Background Soft Glows */}
+      <div className="absolute -top-20 -right-20 w-64 h-64 bg-sky-100/50 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute -bottom-20 -left-20 w-64 h-64 bg-teal-100/50 rounded-full blur-3xl pointer-events-none" />
+
+      {/* Top Header */}
+      <div className="bg-sky-50/70 border border-sky-100 rounded-2xl p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center space-x-3">
-          <div className="p-3 bg-sky-100 border border-sky-200 rounded-2xl text-sky-700">
-            <PenTool className="w-6 h-6 animate-bounce-subtle" />
+          <div className="p-2.5 sm:p-3 bg-gradient-to-tr from-sky-400 to-blue-500 rounded-2xl text-white shadow-md shadow-sky-200 shrink-0">
+            <PenTool className="w-5 h-5 sm:w-6 sm:h-6" />
           </div>
           <div>
             <div className="flex items-center space-x-2">
-              <span className="text-xs font-black uppercase tracking-wider text-sky-800 bg-sky-100 px-2.5 py-0.5 rounded-full border border-sky-200">
+              <span className="text-[10px] sm:text-xs font-black uppercase tracking-wider text-sky-800 bg-white px-2 py-0.5 rounded-full border border-sky-200">
                 Occupational Therapy
               </span>
-              <span className="text-xs text-slate-500 font-medium">ID: {activity.activity_id} (v{activity.activity_version_id})</span>
+              <span className="text-[10px] sm:text-xs text-slate-500 font-medium">Fine Motor Path</span>
             </div>
-            <h3 className="text-xl font-black text-slate-900">{activity.title}</h3>
+            <h3 className="text-base sm:text-lg font-black text-slate-900 mt-0.5">Follow the Wavy Line</h3>
           </div>
         </div>
-      </div>
 
-      {/* Interactive Tracing Canvas */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-slate-600 font-bold flex items-center space-x-1">
-            <MotorIcon className="w-4 h-4 text-sky-600" />
-            <span>Trace inside the dashed blue line:</span>
-          </span>
-          <span className={`font-mono text-sm font-black ${deviationScore > 75 ? 'text-emerald-600' : 'text-amber-600'}`}>
-            Precision Accuracy: {deviationScore}%
-          </span>
-        </div>
-
-        <div className="bg-sky-50/50 rounded-2xl p-2 border border-sky-100 touch-none flex justify-center shadow-inner">
-          <canvas
-            ref={canvasRef}
-            width={580}
-            height={200}
-            onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
-            className="w-full h-auto cursor-crosshair rounded-xl bg-white shadow-xs"
-          />
+        <div className="flex items-center space-x-2 px-3 py-1.5 bg-white rounded-xl border border-sky-100 text-xs font-black text-slate-700 self-start sm:self-auto">
+          <span>{hasTracedEnough ? '✓ Path Complete' : `${tracedPoints.length}/${config.min_completion_points} points`}</span>
         </div>
       </div>
 
-      {/* Control Buttons */}
-      <div className="flex items-center justify-between pt-2">
-        <button
-          onClick={handleReset}
-          className="flex items-center space-x-2 px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold rounded-2xl transition cursor-pointer"
-        >
-          <RotateCcw className="w-4 h-4" />
-          <span>Clear Trace</span>
-        </button>
+      {/* STAGE 1: TRACING SCREEN */}
+      {stage === 'tracing' && (
+        <div className="space-y-4">
+          {/* Instructions Block */}
+          <div className="bg-sky-50/80 border border-sky-100 rounded-2xl p-3.5 sm:p-4 space-y-1">
+            <h4 className="text-sm sm:text-base font-extrabold text-slate-900">
+              Follow the dotted path from the start to the finish.
+            </h4>
+            <p className="text-xs sm:text-sm text-slate-600 font-medium">
+              Move slowly and try to stay close to the line using your finger, stylus, or mouse.
+            </p>
+          </div>
 
-        <button
-          onClick={handleSubmit}
-          disabled={tracedPoints.length < config.min_completion_points || isSubmitting}
-          className={`flex items-center space-x-2 px-6 py-3 font-black rounded-2xl transition shadow-md ${
-            tracedPoints.length >= config.min_completion_points && !isSubmitting
-              ? 'bg-gradient-to-r from-sky-400 to-blue-400 hover:from-sky-500 hover:to-blue-500 text-slate-950 shadow-sky-200 cursor-pointer transform hover:scale-105'
-              : 'bg-slate-200 text-slate-400 cursor-not-allowed'
-          }`}
-        >
-          <CheckCircle2 className="w-5 h-5" />
-          <span>{isSubmitting ? 'Validating...' : 'Submit Motor Trace'}</span>
-        </button>
-      </div>
+          {/* Interactive Tracing Canvas */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between text-xs sm:text-sm">
+              <span className="text-slate-700 font-bold flex items-center space-x-1.5">
+                <MotorIcon className="w-4 h-4 text-sky-600 shrink-0" />
+                <span>
+                  {tracedPoints.length === 0
+                    ? 'Touch green START to begin'
+                    : isTracing
+                    ? 'Tracing in progress...'
+                    : hasTracedEnough
+                    ? 'Trace ready to submit!'
+                    : 'Keep tracing toward FINISH'}
+                </span>
+              </span>
+              <span
+                className={`text-xs font-black px-2.5 py-0.5 rounded-full ${
+                  tracedPoints.length === 0
+                    ? 'text-slate-400 bg-slate-100'
+                    : hasTracedEnough
+                    ? 'text-emerald-700 bg-emerald-50 border border-emerald-200'
+                    : 'text-sky-700 bg-sky-50 border border-sky-200'
+                }`}
+              >
+                {tracedPoints.length === 0
+                  ? 'Ready to trace'
+                  : hasTracedEnough
+                  ? 'Ready to review ✓'
+                  : `${tracedPoints.length} points traced`}
+              </span>
+            </div>
+
+            <div className="bg-sky-50/40 rounded-2xl p-2 sm:p-3 border-2 border-dashed border-sky-200 touch-none flex justify-center shadow-inner overflow-hidden max-w-full">
+              <canvas
+                ref={canvasRef}
+                width={580}
+                height={200}
+                onPointerDown={handlePointerDown}
+                onPointerMove={handlePointerMove}
+                onPointerUp={handlePointerUp}
+                className="w-full h-auto cursor-crosshair rounded-xl bg-white shadow-xs select-none max-w-full"
+                style={{ touchAction: 'none' }}
+              />
+            </div>
+          </div>
+
+          {/* Action Controls */}
+          <div className="flex flex-col-reverse sm:flex-row sm:items-center justify-between gap-3 border-t border-slate-100 pt-4 mt-2">
+            <button
+              type="button"
+              onClick={handleReset}
+              disabled={tracedPoints.length === 0}
+              className={`flex items-center justify-center space-x-2 px-4 py-2.5 text-xs font-black rounded-xl transition ${
+                tracedPoints.length > 0
+                  ? 'bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer'
+                  : 'opacity-40 cursor-not-allowed text-slate-400 bg-slate-50'
+              }`}
+            >
+              <RotateCcw className="w-4 h-4" />
+              <span>Clear & Retrace</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleShowResults}
+              disabled={!hasTracedEnough}
+              className={`flex items-center justify-center space-x-2 px-6 py-3 font-black text-xs sm:text-sm rounded-xl transition shadow-md ${
+                hasTracedEnough
+                  ? 'bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700 text-white shadow-sky-200 cursor-pointer transform hover:scale-105 active:scale-95'
+                  : 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
+              }`}
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              <span>
+                {!hasTracedEnough
+                  ? `Trace a bit more to submit (${config.min_completion_points - tracedPoints.length} pts)`
+                  : 'Submit Trace & View Results →'}
+              </span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* STAGE 2: DEDICATED RESULTS SCREEN */}
+      {stage === 'results' && (
+        <div className="space-y-6 text-center py-2 sm:py-4">
+          {/* Friendly Celebration Icon */}
+          <div className="w-16 h-16 sm:w-20 sm:h-20 bg-sky-50 text-sky-600 rounded-3xl border border-sky-200 flex items-center justify-center mx-auto shadow-xs">
+            <CheckCircle2 className="w-8 h-8 sm:w-10 sm:h-10 text-sky-600 animate-pulse" />
+          </div>
+
+          {/* Heading and Encouraging Copy */}
+          <div className="space-y-1.5">
+            <h3 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
+              Great tracing!
+            </h3>
+            <p className="text-sm sm:text-base text-slate-600 max-w-md mx-auto font-medium">
+              You completed the path. Every try helps you practise control and coordination.
+            </p>
+          </div>
+
+          {/* Authentic Trace Summary Card */}
+          <div className="bg-slate-50/80 border border-slate-200/80 rounded-2xl p-4 sm:p-5 max-w-md mx-auto text-left space-y-3">
+            <div className="flex items-center space-x-2 text-[11px] sm:text-xs font-black uppercase tracking-wider text-slate-500 border-b border-slate-200/80 pb-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+              <span>Practice Recap</span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="bg-white p-3 rounded-xl border border-slate-200/80">
+                <span className="text-[11px] text-slate-500 font-medium block">Path Shape</span>
+                <span className="text-base font-extrabold text-slate-800 capitalize mt-0.5 block">{config.path_shape} wave</span>
+              </div>
+
+              <div className="bg-white p-3 rounded-xl border border-slate-200/80">
+                <span className="text-[11px] text-slate-500 font-medium block">Path Coverage</span>
+                <span className="text-base font-extrabold text-emerald-700 mt-0.5 block">Completed ✓</span>
+              </div>
+
+              <div className="bg-white p-3 rounded-xl border border-slate-200/80 col-span-2 flex items-center justify-between">
+                <div>
+                  <span className="text-[11px] text-slate-500 font-medium block">Motion Guidance</span>
+                  <span className="text-xs font-semibold text-slate-700 mt-0.5 block">Smooth distal hand-eye coordination practiced</span>
+                </div>
+                <span className="text-xs font-black px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 shrink-0 ml-2">
+                  Complete ✓
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Actions: Primary Finish & Return, Secondary Try Again */}
+          <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3 max-w-md mx-auto">
+            <button
+              type="button"
+              onClick={handleFinishAndReturn}
+              disabled={isSubmitting}
+              className="w-full sm:w-auto px-8 py-3.5 bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700 text-white font-black text-sm rounded-xl transition shadow-md shadow-sky-200 transform hover:scale-105 active:scale-95 cursor-pointer flex items-center justify-center space-x-2"
+            >
+              <span>{isSubmitting ? 'Marking as completed...' : 'Mark as completed 🚀'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleReset}
+              disabled={isSubmitting}
+              className="w-full sm:w-auto px-6 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-sm rounded-xl transition cursor-pointer flex items-center justify-center space-x-2"
+            >
+              <RotateCcw className="w-4 h-4 text-slate-500" />
+              <span>Try Again</span>
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -240,7 +431,7 @@ export const FineMotorTraceActivityDefinition: RegisteredActivityDefinition<OTTr
   activity: {
     activity_id: 'act_ot_motor_trace_01',
     activity_version_id: '1.0.0',
-    title: 'Fine Motor Precision Path Tracing',
+    title: 'Follow the Wavy Line',
     short_description: 'Trace along dynamic paths to improve fine motor precision, motor planning, and hand-eye coordination.',
     service: 'occupational_therapy',
     target_skill: 'Fine Motor Precision & Visual Motor Control',

@@ -43,7 +43,7 @@ export const MOCK_PATHWAYS: Pathway[] = [
           {
             activity_id: 'act_speech_language_01',
             activity_version_id: '1.0.0',
-            title: 'Early Language Development Playground',
+            title: "Let's Explore Words!",
             description: '10-stage interactive early language journey.',
             duration_seconds: 200,
             target_skill: 'Receptive & Expressive Language',
@@ -62,7 +62,7 @@ export const MOCK_PATHWAYS: Pathway[] = [
           {
             activity_id: 'act_speech_clarity_01',
             activity_version_id: '1.0.0',
-            title: 'Speech Clarity & Articulation Journey',
+            title: "Let's Practice the R Sound",
             description: '9-step continuous guided practice journey for target sound /r/.',
             duration_seconds: 240,
             target_skill: 'Speech Clarity & Articulation',
@@ -116,7 +116,7 @@ export const MOCK_PATHWAYS: Pathway[] = [
           {
             activity_id: 'act_speech_clarity_01',
             activity_version_id: '1.0.0',
-            title: 'Speech Clarity & Articulation Journey',
+            title: "Let's Practice the R Sound",
             description: '9-step continuous guided practice journey for target sound /r/.',
             duration_seconds: 240,
             target_skill: 'Speech Clarity & Articulation',
@@ -135,7 +135,7 @@ export const MOCK_PATHWAYS: Pathway[] = [
           {
             activity_id: 'act_speech_tone_01',
             activity_version_id: '1.0.0',
-            title: 'Sustained Vocal Pitch & Vowel Hold',
+            title: 'Hold Your Voice Steady',
             description: 'Hold steady vocal pitch for target vowel AH.',
             duration_seconds: 120,
             target_skill: 'Vocal Breath & Pitch Stability',
@@ -187,7 +187,7 @@ export const MOCK_PATHWAYS: Pathway[] = [
           {
             activity_id: 'act_ot_motor_trace_01',
             activity_version_id: '1.0.0',
-            title: 'Fine Motor Precision Path Tracing',
+            title: 'Follow the Wavy Line',
             description: 'Trace guide paths with touch or mouse to build fine motor control.',
             duration_seconds: 180,
             target_skill: 'Fine Motor Precision',
@@ -239,7 +239,7 @@ export const MOCK_PATHWAYS: Pathway[] = [
           {
             activity_id: 'act_aba_emotion_match_01',
             activity_version_id: '1.0.0',
-            title: 'Visual Emotion Cue & Social Prompting',
+            title: 'Match the Feelings',
             description: 'Match facial emotion cards using structured prompt hierarchy hints.',
             duration_seconds: 150,
             target_skill: 'Emotion Recognition',

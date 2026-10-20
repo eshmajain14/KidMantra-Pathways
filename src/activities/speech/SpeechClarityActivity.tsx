@@ -91,20 +91,56 @@ export const SpeechClarityActivityComponent: React.FC<ActivityRendererProps<Spee
   config = DEFAULT_CLARITY_CONFIG,
   onInteraction,
   onSubmit,
+  onBackStep,
+  onStepChange,
   isSubmitting
 }) => {
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const currentStep = STEP_ORDER[currentStepIndex];
   const stepInfo = STEP_LABELS[currentStep];
 
-  // Speech Web API Synthesis helper
-  const playAudioCue = (text: string) => {
+  // Notify container of step index changes
+  useEffect(() => {
+    if (onStepChange) {
+      onStepChange(currentStepIndex, STEP_ORDER.length);
+    }
+  }, [currentStepIndex, onStepChange]);
+
+  // Support external step back navigation triggered from header
+  useEffect(() => {
+    const handleHeaderBack = () => {
+      if (currentStepIndex > 0) {
+        setCurrentStepIndex((prev) => prev - 1);
+      }
+    };
+    window.addEventListener('kidmantra_activity_step_back', handleHeaderBack);
+    return () => {
+      window.removeEventListener('kidmantra_activity_step_back', handleHeaderBack);
+    };
+  }, [currentStepIndex]);
+
+  // Audio playback state tracking
+  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+
+  // Speech Web API Synthesis helper with real playback tracking
+  const playAudioCue = (text: string, onDone?: () => void) => {
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.rate = 0.85;
-      utterance.pitch = 1.15;
+      utterance.pitch = 1.1;
+      setIsPlayingAudio(true);
+      utterance.onend = () => {
+        setIsPlayingAudio(false);
+        if (onDone) onDone();
+      };
+      utterance.onerror = () => {
+        setIsPlayingAudio(false);
+        if (onDone) onDone();
+      };
       window.speechSynthesis.speak(utterance);
+    } else {
+      if (onDone) onDone();
     }
   };
 
@@ -117,6 +153,35 @@ export const SpeechClarityActivityComponent: React.FC<ActivityRendererProps<Spee
   const [recordedAudioBlobUrl, setRecordedAudioBlobUrl] = useState<string | null>(null);
   const [selfRating, setSelfRating] = useState<'great' | 'good' | 'trying' | null>(null);
   const [therapistNotes, setTherapistNotes] = useState('');
+
+  const [hasPlayedModel, setHasPlayedModel] = useState(false);
+  const [hasPlayedWordModel, setHasPlayedWordModel] = useState(false);
+  const [hasPlayedPhraseModel, setHasPlayedPhraseModel] = useState(false);
+
+  const isStepComplete = (): boolean => {
+    switch (currentStep) {
+      case 'HEAR':
+        return hasPlayedModel;
+      case 'NOTICE':
+        return Object.keys(noticeAnswers).length >= config.sample_notice_words.length;
+      case 'SAY':
+        return isolatedSayCount >= 3;
+      case 'WORD':
+        return hasPlayedWordModel;
+      case 'SOUND_POSITION':
+        return selectedPosition !== null;
+      case 'PHRASE':
+        return hasPlayedPhraseModel;
+      case 'RECORD':
+        return !!recordedAudioBlobUrl;
+      case 'REVIEW':
+        return selfRating !== null;
+      case 'COMPLETE':
+        return true;
+      default:
+        return false;
+    }
+  };
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -164,6 +229,25 @@ export const SpeechClarityActivityComponent: React.FC<ActivityRendererProps<Spee
     }
   };
 
+  const handleTryAgain = () => {
+    setCurrentStepIndex(0);
+    setNoticeAnswers({});
+    setIsolatedSayCount(0);
+    setSelectedPosition(null);
+    setIsRecording(false);
+    setRecordingSeconds(0);
+    setRecordedAudioBlobUrl(null);
+    setSelfRating(null);
+    setTherapistNotes('');
+    setHasPlayedModel(false);
+    setHasPlayedWordModel(false);
+    setHasPlayedPhraseModel(false);
+    onInteraction({
+      type: 'prompt_viewed',
+      payload: { action: 'try_again_reset', step: 'HEAR', index: 0 }
+    });
+  };
+
   const handleNoticeToggle = (wordId: string, choice: boolean) => {
     setNoticeAnswers((prev) => ({ ...prev, [wordId]: choice }));
     onInteraction({
@@ -189,52 +273,43 @@ export const SpeechClarityActivityComponent: React.FC<ActivityRendererProps<Spee
   useEffect(() => {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
     };
   }, []);
 
   return (
-    <div className="bg-white border border-slate-200/80 rounded-3xl p-6 md:p-8 shadow-xl text-slate-800 max-w-3xl mx-auto space-y-6 relative overflow-hidden">
-      {/* Soft Pastel Background Blobs */}
-      <div className="absolute -top-20 -right-20 w-64 h-64 bg-pink-100/60 rounded-full blur-3xl pointer-events-none" />
-      <div className="absolute -bottom-20 -left-20 w-64 h-64 bg-sky-100/60 rounded-full blur-3xl pointer-events-none" />
-
-      {/* Top Light Header */}
-      <div className="bg-pink-50/70 border border-pink-100 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm">
-        <div className="flex items-center space-x-3">
-          <div className="p-3 bg-gradient-to-tr from-pink-400 to-purple-400 rounded-2xl text-white shadow-md shadow-pink-200">
-            <Mic className="w-6 h-6 animate-bounce-subtle" />
-          </div>
-          <div>
-            <div className="flex items-center space-x-2">
-              <span className="text-xs font-black uppercase tracking-wider text-pink-700 bg-white px-2.5 py-0.5 rounded-full border border-pink-200 flex items-center space-x-1 shadow-xs">
-                <Sparkles className="w-3 h-3 fill-current text-pink-400" />
-                <span>Speech Clarity Practice</span>
-              </span>
-              <span className="text-xs text-slate-500 font-medium">Target Sound: <strong className="text-pink-600 font-mono text-sm">{config.target_sound}</strong></span>
-            </div>
-            <h3 className="text-lg font-extrabold text-slate-900 mt-0.5">
-              Fun Speech & Articulation Journey
-            </h3>
-          </div>
+    <div className="bg-white border border-slate-200/90 rounded-2xl sm:rounded-3xl p-3.5 sm:p-6 md:p-8 shadow-sm text-slate-800 max-w-3xl mx-auto space-y-4 sm:space-y-6">
+      {/* Activity Introduction */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 sm:pb-4 border-b border-slate-100">
+        <div className="min-w-0">
+          <h2 className="text-lg sm:text-2xl font-black text-slate-900 tracking-tight">
+            Let&apos;s Practice the R Sound
+          </h2>
+          <p className="text-[11px] sm:text-sm text-slate-500 font-medium mt-0.5 flex flex-wrap items-center gap-1.5">
+            <span>Target Sound:</span>
+            <span className="font-mono font-bold text-sky-700 bg-sky-50 px-1.5 py-0.5 rounded-md border border-sky-100">{config.target_sound}</span>
+            <span className="text-slate-300">•</span>
+            <span>Word:</span>
+            <span className="font-semibold text-slate-700">{config.target_word}</span>
+          </p>
         </div>
 
-        <div className="flex items-center space-x-2 px-3 py-1.5 bg-white rounded-xl border border-pink-100 text-xs font-extrabold text-slate-700 shadow-xs">
-          <Zap className="w-4 h-4 text-amber-500 fill-current" />
-          <span>Step {currentStepIndex + 1} of 9</span>
+        <div className="inline-flex items-center space-x-1.5 text-[11px] sm:text-xs font-bold text-slate-600 bg-slate-50 border border-slate-200/80 px-2.5 py-1 rounded-xl self-start sm:self-auto shrink-0">
+          <span className="w-2 h-2 rounded-full bg-sky-500 shrink-0" />
+          <span>Step {currentStepIndex + 1} of {STEP_ORDER.length}: {stepInfo.label.split('. ')[1]}</span>
         </div>
       </div>
 
-      {/* Progress Tracker Pills Bar */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between text-xs font-bold">
-          <span className="bg-gradient-to-r from-pink-600 to-purple-600 bg-clip-text text-transparent text-sm font-black">
-            {stepInfo.label}
-          </span>
-          <span className="text-slate-500 font-medium">{stepInfo.sub}</span>
+      {/* Segmented Step Progress Indicator */}
+      <div className="space-y-1 sm:space-y-1.5">
+        <div className="flex items-center justify-between text-[11px] sm:text-xs font-semibold">
+          <span className="text-sky-700 font-bold">{stepInfo.label}</span>
+          <span className="text-slate-400 font-normal truncate ml-2">{stepInfo.sub}</span>
         </div>
 
-        {/* Dynamic Light Pastel Stage Pills */}
-        <div className="grid grid-cols-9 gap-1.5 bg-slate-100/80 p-2 rounded-2xl border border-slate-200 shadow-inner">
+        <div className="grid grid-cols-9 gap-1 sm:gap-1.5 bg-slate-50 p-1 sm:p-1.5 rounded-xl border border-slate-200/70">
           {STEP_ORDER.map((stepKey, idx) => {
             const isDone = idx < currentStepIndex;
             const isCurrent = idx === currentStepIndex;
@@ -242,12 +317,12 @@ export const SpeechClarityActivityComponent: React.FC<ActivityRendererProps<Spee
               <button
                 key={stepKey}
                 onClick={() => setCurrentStepIndex(idx)}
-                className={`h-3 rounded-lg transition-all duration-300 transform cursor-pointer ${
+                className={`h-2 rounded-md transition-all cursor-pointer ${
                   isCurrent
-                    ? 'bg-gradient-to-r from-pink-400 via-purple-400 to-sky-400 scale-110 shadow-md shadow-pink-200 ring-2 ring-pink-300'
+                    ? 'bg-sky-600 ring-2 ring-sky-200 shadow-xs'
                     : isDone
-                    ? 'bg-emerald-400 shadow-xs'
-                    : 'bg-white hover:bg-slate-200 border border-slate-200'
+                    ? 'bg-emerald-500'
+                    : 'bg-slate-200 hover:bg-slate-300'
                 }`}
                 title={STEP_LABELS[stepKey].label}
               />
@@ -256,99 +331,123 @@ export const SpeechClarityActivityComponent: React.FC<ActivityRendererProps<Spee
         </div>
       </div>
 
-      {/* CONTINUOUS JOURNEY STEP CONTENT CARD */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-6 min-h-[380px] flex flex-col justify-between shadow-sm relative">
+      {/* Main Learning Canvas */}
+      <div className="pt-2">
         {/* STEP 1: HEAR */}
         {currentStep === 'HEAR' && (
-          <div className="space-y-6 animate-fadeIn">
-            <div className="space-y-1.5">
-              <span className="text-xs uppercase font-black tracking-wider text-pink-600 flex items-center space-x-1">
-                <Music className="w-3.5 h-3.5" />
-                <span>Step 1 • Listen & Hear</span>
-              </span>
-              <h4 className="text-2xl font-black text-slate-900">Listen to the Target Sound</h4>
-              <p className="text-sm text-slate-600 font-medium">
-                Focus on how <strong className="text-pink-600 font-mono text-base">{config.target_sound}</strong> sounds when pronounced clearly!
+          <div className="space-y-6">
+            <div className="text-center space-y-1">
+              <h3 className="text-xl sm:text-2xl font-black text-slate-900">Listen to the Target Sound</h3>
+              <p className="text-xs sm:text-sm text-slate-500 max-w-md mx-auto">
+                Listen carefully to how <span className="font-mono font-bold text-sky-700">{config.target_sound}</span> sounds when spoken clearly.
               </p>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="p-6 bg-pink-50/60 rounded-2xl border border-pink-100 space-y-4 flex flex-col justify-center items-center text-center shadow-xs">
-                <div className="w-24 h-24 rounded-3xl bg-gradient-to-tr from-pink-400 to-purple-400 border-4 border-white flex items-center justify-center text-white text-4xl font-mono font-black shadow-lg shadow-pink-200">
-                  {config.target_sound}
-                </div>
-                <button
-                  onClick={() => playAudioCue(`Target sound: ${config.target_sound}. ${config.target_word}`)}
-                  className="flex items-center space-x-2 px-6 py-3 bg-gradient-to-r from-pink-500 to-purple-500 hover:from-pink-600 hover:to-purple-600 text-white font-extrabold text-sm rounded-2xl transition shadow-md shadow-pink-200 transform hover:scale-105 active:scale-95 cursor-pointer"
-                >
-                  <Volume2 className="w-5 h-5 fill-current" />
-                  <span>Play Model Sound 🔊</span>
-                </button>
+            {/* Target sound focal presentation with subtle sound wave visual */}
+            <div className="bg-slate-50/80 border border-slate-200/80 rounded-2xl p-6 sm:p-8 flex flex-col items-center justify-center text-center space-y-5">
+              <div className="text-6xl sm:text-7xl font-mono font-black text-sky-700 tracking-wider">
+                {config.target_sound}
               </div>
 
-              <div className="p-6 bg-sky-50/60 rounded-2xl border border-sky-100 space-y-3 shadow-xs">
-                <div className="flex items-center space-x-2 text-sky-700 font-black text-sm">
-                  <Sparkles className="w-4 h-4 text-sky-500" />
-                  <span>Mouth Placement Secret Tip</span>
-                </div>
-                <p className="text-xs text-slate-700 leading-relaxed font-medium bg-white p-4 rounded-xl border border-sky-100 shadow-2xs">
-                  {config.mouth_placement_tip}
-                </p>
+              {/* Subtle Audio Wave Visual */}
+              <div className="flex items-center justify-center space-x-1.5 h-8">
+                {[12, 24, 18, 32, 28, 16, 26, 14, 20].map((height, i) => (
+                  <span
+                    key={i}
+                    style={{ height: isPlayingAudio ? `${height}px` : '6px' }}
+                    className={`w-1 rounded-full transition-all duration-200 ${
+                      isPlayingAudio ? 'bg-sky-500' : 'bg-slate-300'
+                    }`}
+                  />
+                ))}
               </div>
+
+              {/* Primary Listening Control */}
+              <button
+                type="button"
+                onClick={() => {
+                  setHasPlayedModel(true);
+                  playAudioCue(`Target sound: ${config.target_sound}. ${config.target_word}`);
+                }}
+                disabled={isPlayingAudio}
+                className="inline-flex items-center space-x-2 px-6 py-3 bg-sky-600 hover:bg-sky-700 text-white font-bold text-sm rounded-xl transition shadow-sm cursor-pointer active:scale-95"
+              >
+                <Volume2 className="w-4 h-4" />
+                <span>
+                  {isPlayingAudio
+                    ? 'Playing sound...'
+                    : hasPlayedModel
+                    ? 'Replay sound 🔊'
+                    : 'Play sound 🔊'}
+                </span>
+              </button>
+            </div>
+
+            {/* Mouth-Placement Guidance */}
+            <div className="bg-white border border-slate-200/90 rounded-2xl p-4 sm:p-5 space-y-2">
+              <div className="flex items-center space-x-2 text-xs font-bold text-slate-800 uppercase tracking-wider">
+                <Sparkles className="w-4 h-4 text-sky-600" />
+                <span>Mouth Placement</span>
+              </div>
+              <p className="text-xs sm:text-sm text-slate-600 leading-relaxed font-normal">
+                {config.mouth_placement_tip}
+              </p>
             </div>
           </div>
         )}
 
         {/* STEP 2: NOTICE */}
         {currentStep === 'NOTICE' && (
-          <div className="space-y-6 animate-fadeIn">
-            <div className="space-y-1.5">
-              <span className="text-xs uppercase font-black tracking-wider text-purple-600 flex items-center space-x-1">
-                <Zap className="w-3.5 h-3.5" />
-                <span>Step 2 • Sound Discrimination</span>
-              </span>
-              <h4 className="text-2xl font-black text-slate-900">Spot the Target Sound</h4>
-              <p className="text-sm text-slate-600 font-medium">
-                Listen to each word below. Does it contain the <strong className="text-purple-600 font-mono text-base">{config.target_sound}</strong> sound?
+          <div className="space-y-6">
+            <div className="text-center space-y-1">
+              <h3 className="text-xl sm:text-2xl font-black text-slate-900">Spot the Target Sound</h3>
+              <p className="text-xs sm:text-sm text-slate-500 max-w-md mx-auto">
+                Listen to each word. Does it contain the <span className="font-mono font-bold text-sky-700">{config.target_sound}</span> sound?
               </p>
             </div>
 
-            <div className="space-y-3">
+            <div className="space-y-2.5">
               {config.sample_notice_words.map((item) => {
                 const userChoice = noticeAnswers[item.id];
                 return (
-                  <div key={item.id} className="p-4 bg-slate-50/80 rounded-2xl border border-slate-200 flex items-center justify-between shadow-2xs">
+                  <div
+                    key={item.id}
+                    className="p-3.5 sm:p-4 bg-slate-50 border border-slate-200/80 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                  >
                     <div className="flex items-center space-x-3">
                       <button
+                        type="button"
                         onClick={() => playAudioCue(item.word)}
-                        className="p-3 bg-purple-100 hover:bg-purple-200 text-purple-700 rounded-2xl border border-purple-200 transition transform hover:scale-105"
+                        className="p-2.5 bg-white hover:bg-sky-50 text-sky-700 rounded-xl border border-slate-200 transition cursor-pointer shrink-0"
                         title="Listen to word"
                       >
-                        <Volume2 className="w-5 h-5" />
+                        <Volume2 className="w-4 h-4" />
                       </button>
-                      <span className="text-xl font-black text-slate-900">{item.word}</span>
+                      <span className="text-base sm:text-lg font-bold text-slate-900">{item.word}</span>
                     </div>
 
-                    <div className="flex items-center space-x-2">
+                    <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center sm:space-x-2">
                       <button
+                        type="button"
                         onClick={() => handleNoticeToggle(item.id, true)}
-                        className={`px-4 py-2.5 text-xs font-black rounded-xl transition border transform hover:scale-105 cursor-pointer ${
+                        className={`px-4 py-2 text-xs font-bold rounded-xl transition border cursor-pointer text-center ${
                           userChoice === true
-                            ? 'bg-emerald-400 text-slate-950 border-emerald-300 shadow-md shadow-emerald-200'
+                            ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
                             : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
                         }`}
                       >
-                        Yes, I Hear It! 🎉
+                        Yes, I Hear It
                       </button>
                       <button
+                        type="button"
                         onClick={() => handleNoticeToggle(item.id, false)}
-                        className={`px-4 py-2.5 text-xs font-black rounded-xl transition border transform hover:scale-105 cursor-pointer ${
+                        className={`px-4 py-2 text-xs font-bold rounded-xl transition border cursor-pointer text-center ${
                           userChoice === false
-                            ? 'bg-rose-400 text-white border-rose-300 shadow-md shadow-rose-200'
+                            ? 'bg-slate-700 text-white border-slate-700 shadow-xs'
                             : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
                         }`}
                       >
-                        No Target Sound ❌
+                        No Sound
                       </button>
                     </div>
                   </div>
@@ -360,97 +459,90 @@ export const SpeechClarityActivityComponent: React.FC<ActivityRendererProps<Spee
 
         {/* STEP 3: SAY */}
         {currentStep === 'SAY' && (
-          <div className="space-y-6 animate-fadeIn text-center">
-            <div className="space-y-1.5">
-              <span className="text-xs uppercase font-black tracking-wider text-sky-600 flex items-center space-x-1 justify-center">
-                <Rocket className="w-3.5 h-3.5" />
-                <span>Step 3 • Isolated Sound Practice</span>
-              </span>
-              <h4 className="text-2xl font-black text-slate-900">Isolated Sound Repetition</h4>
-              <p className="text-sm text-slate-600 max-w-md mx-auto font-medium">
-                Practice saying the isolated <strong className="text-sky-600 font-mono text-lg">{config.target_sound}</strong> sound out loud 3 times!
+          <div className="space-y-6 text-center">
+            <div className="space-y-1">
+              <h3 className="text-xl sm:text-2xl font-black text-slate-900">Say Sound in Isolation</h3>
+              <p className="text-xs sm:text-sm text-slate-500 max-w-md mx-auto">
+                Practice saying the isolated <span className="font-mono font-bold text-sky-700 text-base">{config.target_sound}</span> sound out loud 3 times.
               </p>
             </div>
 
-            <div className="py-6 space-y-6">
-              <div className="text-7xl font-mono font-black text-transparent bg-clip-text bg-gradient-to-r from-sky-500 via-teal-500 to-emerald-500 tracking-widest animate-pulse">
+            <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-6 sm:p-8 space-y-6">
+              <div className="text-6xl sm:text-7xl font-mono font-black text-sky-700 tracking-wider">
                 {config.target_sound}
               </div>
 
-              <div className="flex justify-center items-center space-x-4">
+              <div className="flex justify-center items-center space-x-3">
                 {[1, 2, 3].map((num) => (
                   <button
                     key={num}
+                    type="button"
                     onClick={() => {
                       setIsolatedSayCount(num);
                       playAudioCue(config.target_sound);
                     }}
-                    className={`w-16 h-16 rounded-2xl font-black text-xl transition-all transform hover:scale-110 active:scale-95 border-2 flex items-center justify-center cursor-pointer shadow-md ${
+                    className={`w-14 h-14 rounded-xl font-bold text-sm transition-all border flex flex-col items-center justify-center cursor-pointer ${
                       isolatedSayCount >= num
-                        ? 'bg-gradient-to-tr from-emerald-400 to-teal-300 text-slate-950 border-emerald-300 shadow-emerald-200 scale-105'
-                        : 'bg-slate-50 text-slate-400 border-slate-200 hover:bg-white'
+                        ? 'bg-sky-600 text-white border-sky-600 shadow-xs'
+                        : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300'
                     }`}
                   >
-                    {isolatedSayCount >= num ? <Star className="w-8 h-8 fill-current text-slate-950" /> : `#${num}`}
+                    <span>Rep {num}</span>
+                    <span className="text-[10px]">{isolatedSayCount >= num ? '✓ Done' : 'Tap'}</span>
                   </button>
                 ))}
               </div>
-              <p className="text-xs font-bold text-slate-500">Click each star as you speak the sound out loud!</p>
+              <p className="text-xs text-slate-500 font-medium">Click each counter after saying the sound out loud.</p>
             </div>
           </div>
         )}
 
         {/* STEP 4: WORD */}
         {currentStep === 'WORD' && (
-          <div className="space-y-6 animate-fadeIn">
-            <div className="space-y-1.5">
-              <span className="text-xs uppercase font-black tracking-wider text-teal-600 flex items-center space-x-1">
-                <Star className="w-3.5 h-3.5" />
-                <span>Step 4 • Word Practice</span>
-              </span>
-              <h4 className="text-2xl font-black text-slate-900">Target Word Practice</h4>
-              <p className="text-sm text-slate-600 font-medium">
-                Put the sound into your target word: <strong className="text-teal-600 font-bold text-base">{config.target_word}</strong>!
+          <div className="space-y-6">
+            <div className="text-center space-y-1">
+              <h3 className="text-xl sm:text-2xl font-black text-slate-900">Target Word Practice</h3>
+              <p className="text-xs sm:text-sm text-slate-500 max-w-md mx-auto">
+                Place the sound into your target word: <strong className="text-slate-800">{config.target_word}</strong>.
               </p>
             </div>
 
-            <div className="p-8 bg-emerald-50/60 rounded-2xl border border-emerald-100 text-center space-y-4 shadow-xs">
-              <div className="text-5xl font-black text-emerald-800 tracking-wider">
+            <div className="p-8 bg-slate-50 border border-slate-200/80 rounded-2xl text-center space-y-5">
+              <div className="text-4xl sm:text-5xl font-black text-slate-900 tracking-wide">
                 {config.target_word}
               </div>
 
-              <div className="flex justify-center space-x-2 pt-2">
-                <button
-                  onClick={() => playAudioCue(config.target_word)}
-                  className="flex items-center space-x-2 px-6 py-3 bg-gradient-to-r from-emerald-400 to-teal-400 hover:from-emerald-500 hover:to-teal-500 text-slate-950 font-black text-sm rounded-2xl transition shadow-md shadow-emerald-200 transform hover:scale-105 active:scale-95 cursor-pointer"
-                >
-                  <Volume2 className="w-5 h-5 fill-current" />
-                  <span>Listen to Model Word 🔊</span>
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setHasPlayedWordModel(true);
+                  playAudioCue(config.target_word);
+                }}
+                disabled={isPlayingAudio}
+                className="inline-flex items-center space-x-2 px-6 py-3 bg-sky-600 hover:bg-sky-700 text-white font-bold text-sm rounded-xl transition shadow-sm cursor-pointer"
+              >
+                <Volume2 className="w-4 h-4" />
+                <span>{hasPlayedWordModel ? 'Replay Word 🔊' : 'Listen to Word 🔊'}</span>
+              </button>
             </div>
           </div>
         )}
 
         {/* STEP 5: SOUND POSITION */}
         {currentStep === 'SOUND_POSITION' && (
-          <div className="space-y-6 animate-fadeIn">
-            <div className="space-y-1.5">
-              <span className="text-xs uppercase font-black tracking-wider text-emerald-600 flex items-center space-x-1">
-                <Flame className="w-3.5 h-3.5" />
-                <span>Step 5 • Sound Position</span>
-              </span>
-              <h4 className="text-2xl font-black text-slate-900">Locate the Sound Position</h4>
-              <p className="text-sm text-slate-600 font-medium">
-                Where does the <strong className="text-emerald-600 font-mono text-base">{config.target_sound}</strong> sound live in <strong className="text-slate-900">{config.target_word}</strong>?
+          <div className="space-y-6">
+            <div className="text-center space-y-1">
+              <h3 className="text-xl sm:text-2xl font-black text-slate-900">Sound Position</h3>
+              <p className="text-xs sm:text-sm text-slate-500 max-w-md mx-auto">
+                Where is the <span className="font-mono font-bold text-sky-700">{config.target_sound}</span> sound located in <strong className="text-slate-900">{config.target_word}</strong>?
               </p>
             </div>
 
-            <div className="grid grid-cols-3 gap-4 py-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               {[
-                { pos: 'Initial', label: 'Beginning 🚀', icon: 'START' },
-                { pos: 'Medial', label: 'Middle 🌟', icon: 'MID' },
-                { pos: 'Final', label: 'End 🏁', icon: 'FINISH' }
+                { pos: 'Initial', label: 'Beginning', sub: 'Starts with /r/' },
+                { pos: 'Medial', label: 'Middle', sub: 'In the middle' },
+                { pos: 'Final', label: 'End', sub: 'Ends with /r/' }
               ].map((item) => {
                 const isSelected = selectedPosition === item.pos;
                 const isCorrect = item.pos === config.sound_position;
@@ -458,6 +550,7 @@ export const SpeechClarityActivityComponent: React.FC<ActivityRendererProps<Spee
                 return (
                   <button
                     key={item.pos}
+                    type="button"
                     onClick={() => {
                       setSelectedPosition(item.pos as any);
                       onInteraction({
@@ -465,16 +558,21 @@ export const SpeechClarityActivityComponent: React.FC<ActivityRendererProps<Spee
                         payload: { step: 'SOUND_POSITION', selected_pos: item.pos, is_correct: isCorrect }
                       });
                     }}
-                    className={`p-6 rounded-2xl border-2 transition-all text-center space-y-2 cursor-pointer transform hover:scale-105 ${
+                    className={`p-5 rounded-2xl border transition-all text-center space-y-1 cursor-pointer ${
                       isSelected
                         ? isCorrect
-                          ? 'bg-emerald-100 border-emerald-400 text-emerald-950 scale-105 shadow-md shadow-emerald-200 ring-2 ring-emerald-300 font-black'
-                          : 'bg-rose-100 border-rose-300 text-rose-950 font-black'
+                          ? 'bg-emerald-50 border-emerald-500 text-emerald-900 ring-2 ring-emerald-200'
+                          : 'bg-rose-50 border-rose-300 text-rose-900'
                         : 'bg-slate-50 border-slate-200 hover:bg-white text-slate-700'
                     }`}
                   >
-                    <div className="text-xs uppercase tracking-wider font-black text-slate-500">{item.icon}</div>
-                    <div className="text-lg font-black">{item.label}</div>
+                    <div className="text-sm font-bold">{item.label}</div>
+                    <div className="text-xs text-slate-500">{item.sub}</div>
+                    {isSelected && (
+                      <div className="text-[11px] font-bold mt-1 text-emerald-700">
+                        {isCorrect ? '✓ Correct position' : 'Try another position'}
+                      </div>
+                    )}
                   </button>
                 );
               })}
@@ -484,28 +582,29 @@ export const SpeechClarityActivityComponent: React.FC<ActivityRendererProps<Spee
 
         {/* STEP 6: PHRASE */}
         {currentStep === 'PHRASE' && (
-          <div className="space-y-6 animate-fadeIn">
-            <div className="space-y-1.5">
-              <span className="text-xs uppercase font-black tracking-wider text-amber-600 flex items-center space-x-1">
-                <Music className="w-3.5 h-3.5" />
-                <span>Step 6 • Carrier Sentence</span>
-              </span>
-              <h4 className="text-2xl font-black text-slate-900">Practice in Sentence Context</h4>
-              <p className="text-sm text-slate-600 font-medium">
-                Read or repeat the carrier phrase out loud with clear speech clarity!
+          <div className="space-y-6">
+            <div className="text-center space-y-1">
+              <h3 className="text-xl sm:text-2xl font-black text-slate-900">Carrier Sentence Practice</h3>
+              <p className="text-xs sm:text-sm text-slate-500 max-w-md mx-auto">
+                Repeat the phrase out loud with clear speech clarity.
               </p>
             </div>
 
-            <div className="p-8 bg-amber-50/70 rounded-2xl border border-amber-100 text-center space-y-4 shadow-xs">
-              <p className="text-2xl font-black text-amber-900 leading-relaxed font-serif italic">
+            <div className="p-6 sm:p-8 bg-slate-50 border border-slate-200/80 rounded-2xl text-center space-y-5">
+              <p className="text-lg sm:text-xl font-medium text-slate-900 leading-relaxed italic">
                 &quot;{config.carrier_phrase}&quot;
               </p>
               <button
-                onClick={() => playAudioCue(config.carrier_phrase)}
-                className="inline-flex items-center space-x-2 px-6 py-3 bg-gradient-to-r from-amber-400 to-orange-400 hover:from-amber-500 hover:to-orange-500 text-slate-950 text-sm font-black rounded-2xl transition shadow-md shadow-amber-200 transform hover:scale-105 cursor-pointer"
+                type="button"
+                onClick={() => {
+                  setHasPlayedPhraseModel(true);
+                  playAudioCue(config.carrier_phrase);
+                }}
+                disabled={isPlayingAudio}
+                className="inline-flex items-center space-x-2 px-6 py-3 bg-sky-600 hover:bg-sky-700 text-white font-bold text-sm rounded-xl transition shadow-sm cursor-pointer"
               >
-                <Volume2 className="w-5 h-5 fill-current" />
-                <span>Listen to Sentence 🔊</span>
+                <Volume2 className="w-4 h-4" />
+                <span>{hasPlayedPhraseModel ? 'Replay Sentence 🔊' : 'Listen to Sentence 🔊'}</span>
               </button>
             </div>
           </div>
@@ -513,47 +612,45 @@ export const SpeechClarityActivityComponent: React.FC<ActivityRendererProps<Spee
 
         {/* STEP 7: RECORD */}
         {currentStep === 'RECORD' && (
-          <div className="space-y-6 animate-fadeIn">
-            <div className="space-y-1.5">
-              <span className="text-xs uppercase font-black tracking-wider text-rose-600 flex items-center space-x-1">
-                <Mic className="w-3.5 h-3.5" />
-                <span>Step 7 • Record Voice</span>
-              </span>
-              <h4 className="text-2xl font-black text-slate-900">Record Your Speech Sample</h4>
-              <p className="text-sm text-slate-600 font-medium">
-                Press record and say: <strong className="text-rose-600 font-bold">&quot;{config.target_word}&quot;</strong> or <strong className="text-amber-600 font-bold">&quot;{config.carrier_phrase}&quot;</strong>.
+          <div className="space-y-6">
+            <div className="text-center space-y-1">
+              <h3 className="text-xl sm:text-2xl font-black text-slate-900">Record Your Voice</h3>
+              <p className="text-xs sm:text-sm text-slate-500 max-w-md mx-auto">
+                Say <strong className="text-slate-800">&quot;{config.target_word}&quot;</strong> or the carrier phrase out loud.
               </p>
             </div>
 
-            <div className="p-8 bg-rose-50/70 rounded-2xl border border-rose-100 text-center space-y-4 shadow-xs">
-              <div className="text-4xl font-mono font-black text-rose-600">
+            <div className="p-6 sm:p-8 bg-slate-50 border border-slate-200/80 rounded-2xl text-center space-y-5">
+              <div className="text-3xl sm:text-4xl font-mono font-bold text-slate-800">
                 {recordingSeconds.toFixed(1)}s
               </div>
 
-              <div className="flex justify-center space-x-4">
+              <div className="flex justify-center space-x-3">
                 {!isRecording ? (
                   <button
+                    type="button"
                     onClick={startAudioRecording}
-                    className="flex items-center space-x-2 px-6 py-3.5 bg-gradient-to-r from-rose-400 to-pink-400 hover:from-rose-500 hover:to-pink-500 text-white font-black rounded-2xl transition shadow-md shadow-rose-200 transform hover:scale-105 cursor-pointer"
+                    className="inline-flex items-center space-x-2 px-6 py-3 bg-rose-600 hover:bg-rose-700 text-white font-bold text-sm rounded-xl transition shadow-sm cursor-pointer"
                   >
-                    <Play className="w-5 h-5 fill-current" />
-                    <span>Start Voice Recording 🎤</span>
+                    <Play className="w-4 h-4 fill-current" />
+                    <span>Start Recording 🎤</span>
                   </button>
                 ) : (
                   <button
+                    type="button"
                     onClick={stopAudioRecording}
-                    className="flex items-center space-x-2 px-6 py-3.5 bg-rose-500 hover:bg-rose-600 text-white font-black rounded-2xl transition shadow-md shadow-rose-200 transform hover:scale-105 cursor-pointer"
+                    className="inline-flex items-center space-x-2 px-6 py-3 bg-slate-800 hover:bg-slate-900 text-white font-bold text-sm rounded-xl transition shadow-sm cursor-pointer"
                   >
-                    <Square className="w-5 h-5 fill-current" />
+                    <Square className="w-4 h-4 fill-current" />
                     <span>Stop Recording</span>
                   </button>
                 )}
               </div>
 
               {recordedAudioBlobUrl && (
-                <div className="pt-2 text-xs text-emerald-700 font-black flex items-center justify-center space-x-1">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-                  <span>Audio sample captured! Ready for Review.</span>
+                <div className="text-xs text-emerald-700 font-bold flex items-center justify-center space-x-1">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  <span>Voice sample ready for review</span>
                 </div>
               )}
             </div>
@@ -562,51 +659,49 @@ export const SpeechClarityActivityComponent: React.FC<ActivityRendererProps<Spee
 
         {/* STEP 8: REVIEW */}
         {currentStep === 'REVIEW' && (
-          <div className="space-y-6 animate-fadeIn">
-            <div className="space-y-1.5">
-              <span className="text-xs uppercase font-black tracking-wider text-pink-600 flex items-center space-x-1">
-                <Heart className="w-3.5 h-3.5" />
-                <span>Step 8 • Self Review</span>
-              </span>
-              <h4 className="text-2xl font-black text-slate-900">Self-Assessment & Feeling</h4>
-              <p className="text-sm text-slate-600 font-medium">
-                How did your speech practice feel today? Pick your star feeling!
+          <div className="space-y-6">
+            <div className="text-center space-y-1">
+              <h3 className="text-xl sm:text-2xl font-black text-slate-900">Practice Reflection</h3>
+              <p className="text-xs sm:text-sm text-slate-500 max-w-md mx-auto">
+                How did your speech articulation practice feel today?
               </p>
             </div>
 
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               {[
-                { id: 'great', label: 'Super Star! 🌟', icon: Star, color: 'text-amber-800 border-amber-300 bg-amber-100 shadow-amber-100' },
-                { id: 'good', label: 'Great Effort! 👍', icon: ThumbsUp, color: 'text-teal-800 border-teal-300 bg-teal-100 shadow-teal-100' },
-                { id: 'trying', label: 'Having Fun! 😊', icon: Smile, color: 'text-purple-800 border-purple-300 bg-purple-100 shadow-purple-100' }
+                { id: 'great', label: 'Great Practice 🌟', sub: 'Felt clear and easy' },
+                { id: 'good', label: 'Good Effort 👍', sub: 'Did my best today' },
+                { id: 'trying', label: 'Still Learning 😊', sub: 'Practicing tongue position' }
               ].map((item) => {
                 const isSelected = selfRating === item.id;
-                const IconComp = item.icon;
                 return (
                   <button
                     key={item.id}
+                    type="button"
                     onClick={() => setSelfRating(item.id as any)}
-                    className={`p-6 rounded-2xl border-2 transition-all flex flex-col items-center space-y-2 cursor-pointer transform hover:scale-105 ${
-                      isSelected ? `${item.color} ring-2 ring-slate-400 scale-105 shadow-md` : 'bg-slate-50 border-slate-200 hover:bg-white text-slate-700'
+                    className={`p-4 rounded-2xl border transition-all text-center space-y-1 cursor-pointer ${
+                      isSelected
+                        ? 'bg-sky-50 border-sky-500 text-sky-900 ring-2 ring-sky-200 font-bold'
+                        : 'bg-slate-50 border-slate-200 hover:bg-white text-slate-700'
                     }`}
                   >
-                    <IconComp className="w-10 h-10" />
-                    <span className="font-black text-sm">{item.label}</span>
+                    <div className="text-sm font-bold">{item.label}</div>
+                    <div className="text-xs text-slate-500">{item.sub}</div>
                   </button>
                 );
               })}
             </div>
 
-            {/* Therapist / Parent Note Input */}
-            <div className="space-y-2">
-              <label className="text-xs font-black text-slate-500 uppercase tracking-wider">
-                Therapist / Parent Practice Note (Optional)
+            {/* Optional Observation Notes */}
+            <div className="space-y-1.5 pt-2">
+              <label className="text-xs font-semibold text-slate-600">
+                Therapist or Parent Observation (Optional)
               </label>
               <textarea
                 value={therapistNotes}
                 onChange={(e) => setTherapistNotes(e.target.value)}
-                placeholder="Add clinical observation notes regarding tongue posture, breath flow, or child engagement..."
-                className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-xs text-slate-800 focus:outline-none focus:border-pink-400 h-20 font-medium"
+                placeholder="Notes on tongue placement, breath support, or engagement..."
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-800 focus:outline-none focus:border-sky-500 h-20 font-medium"
               />
             </div>
           </div>
@@ -614,72 +709,127 @@ export const SpeechClarityActivityComponent: React.FC<ActivityRendererProps<Spee
 
         {/* STEP 9: COMPLETE */}
         {currentStep === 'COMPLETE' && (
-          <div className="space-y-6 animate-fadeIn text-center py-4">
-            <div className="relative inline-block">
-              <div className="w-24 h-24 bg-gradient-to-tr from-amber-300 to-pink-400 rounded-full flex items-center justify-center mx-auto text-slate-900 shadow-xl border-4 border-white">
-                <Award className="w-12 h-12 animate-bounce-subtle" />
-              </div>
+          <div className="space-y-5 sm:space-y-6 text-center py-2 sm:py-4">
+            {/* Celebration Icon / Hero */}
+            <div className="w-16 h-16 sm:w-20 sm:h-20 bg-sky-50 text-sky-600 rounded-3xl border border-sky-200/80 flex items-center justify-center mx-auto shadow-xs">
+              <Sparkles className="w-8 h-8 sm:w-10 sm:h-10 text-sky-600 animate-pulse" />
             </div>
 
+            {/* Headline and Supportive Copy */}
             <div className="space-y-1.5">
-              <span className="text-xs uppercase font-black tracking-wider text-amber-600">Activity Completion</span>
-              <h4 className="text-3xl font-black text-slate-900">Speech Clarity Badge Earned! 🎉</h4>
-              <p className="text-sm text-slate-600 max-w-md mx-auto font-medium">
-                Awesome job! You completed all 9 steps of the <strong className="text-pink-600 font-mono">{config.target_sound}</strong> speech journey for target word &quot;{config.target_word}&quot;!
+              <h3 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
+                You did it!
+              </h3>
+              <p className="text-xs sm:text-sm text-slate-600 max-w-md mx-auto font-medium">
+                Great work exploring the <span className="font-mono font-bold text-sky-700 bg-sky-50 px-2 py-0.5 rounded-md border border-sky-100">{config.target_sound}</span> sound with{' '}
+                <strong className="text-slate-900 font-extrabold">{config.target_word}</strong>!
               </p>
             </div>
 
-            <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 max-w-md mx-auto text-left text-xs space-y-2 shadow-2xs">
-              <div className="flex justify-between text-slate-600">
-                <span>Journey Steps Completed:</span>
-                <span className="text-emerald-600 font-black">9 of 9 Steps</span>
+            {/* Target Word Hero Highlight */}
+            <div className="inline-flex items-center space-x-2 px-5 py-2.5 bg-gradient-to-r from-sky-50 to-indigo-50 border border-sky-100 rounded-2xl shadow-xs">
+              <span className="text-2xl sm:text-3xl">🐰</span>
+              <span className="text-lg sm:text-xl font-black text-sky-950">{config.target_word}</span>
+            </div>
+
+            {/* Learning Recap: Clean cards showing verified activity data */}
+            <div className="bg-slate-50/80 border border-slate-200/80 rounded-2xl p-3.5 sm:p-5 max-w-lg mx-auto text-left space-y-3">
+              <div className="flex items-center space-x-2 text-[11px] sm:text-xs font-black uppercase tracking-wider text-slate-500 border-b border-slate-200/80 pb-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                <span>Today&apos;s Practice Recap</span>
               </div>
-              <div className="flex justify-between text-slate-600">
-                <span>Self-Reflection Rating:</span>
-                <span className="text-pink-600 font-black capitalize">{selfRating || 'Super Star!'}</span>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
+                {/* Sound Practiced */}
+                <div className="bg-white p-3 rounded-xl border border-slate-200/80 flex flex-col justify-center">
+                  <span className="text-[11px] text-slate-500 font-medium">Sound Practiced</span>
+                  <span className="font-mono text-base font-black text-sky-700 mt-0.5">{config.target_sound}</span>
+                </div>
+
+                {/* Word Explored */}
+                <div className="bg-white p-3 rounded-xl border border-slate-200/80 flex flex-col justify-center">
+                  <span className="text-[11px] text-slate-500 font-medium">Word Explored</span>
+                  <span className="font-extrabold text-slate-800 text-sm mt-0.5 truncate">{config.target_word}</span>
+                </div>
+
+                {/* Sound Position */}
+                <div className="bg-white p-3 rounded-xl border border-slate-200/80 flex flex-col justify-center">
+                  <span className="text-[11px] text-slate-500 font-medium">Sound Position</span>
+                  <span className="font-bold text-slate-800 text-sm mt-0.5">
+                    {selectedPosition === 'Initial'
+                      ? 'Beginning'
+                      : selectedPosition === 'Medial'
+                      ? 'Middle'
+                      : selectedPosition === 'Final'
+                      ? 'End'
+                      : 'Beginning'}
+                  </span>
+                </div>
               </div>
-              <div className="flex justify-between text-slate-600">
-                <span>Voice Recording Captured:</span>
-                <span className="text-teal-600 font-black">{recordedAudioBlobUrl ? 'Recorded 🎤' : 'None'}</span>
+
+              {/* In-Session Voice Recording Status (Accurate, no claim of database save) */}
+              <div className="bg-white p-2.5 rounded-xl border border-slate-200/80 flex items-center justify-between text-xs">
+                <span className="text-slate-600 font-medium">Voice Practice Sample:</span>
+                <span className="font-bold text-sky-800 bg-sky-50 px-2 py-0.5 rounded-lg border border-sky-100">
+                  {recordedAudioBlobUrl ? 'Completed in session ✓' : 'Guided listening complete'}
+                </span>
               </div>
             </div>
 
-            <div className="pt-2">
+            {/* Primary Action (Back to Dashboard) & Quieter Secondary (Try Again) */}
+            <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3 max-w-md mx-auto">
               <button
+                type="button"
                 onClick={handleFinalSubmit}
                 disabled={isSubmitting}
-                className="px-8 py-4 bg-gradient-to-r from-pink-400 via-purple-400 to-sky-400 hover:from-pink-500 hover:to-sky-500 text-white font-black text-base rounded-2xl transition shadow-xl shadow-pink-200 transform hover:scale-105 active:scale-95 cursor-pointer"
+                className="w-full sm:w-auto px-8 py-3.5 bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-700 hover:to-indigo-700 text-white font-black text-sm rounded-xl transition shadow-md shadow-sky-200 transform hover:scale-105 active:scale-95 cursor-pointer flex items-center justify-center space-x-2"
               >
-                {isSubmitting ? 'Saving Activity Session...' : 'Complete & Advance to Next Activity 🚀'}
+                <span>{isSubmitting ? 'Marking as completed...' : 'Mark as completed 🚀'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleTryAgain}
+                disabled={isSubmitting}
+                className="w-full sm:w-auto px-6 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-sm rounded-xl transition cursor-pointer flex items-center justify-center space-x-2"
+              >
+                <span>Try Again</span>
               </button>
             </div>
           </div>
         )}
+      </div>
 
-        {/* BOTTOM NAVIGATION FOOTER */}
-        <div className="flex items-center justify-between border-t border-slate-100 pt-4 mt-6">
+      {/* Bottom Navigation Control Bar (Hidden on completion screen) */}
+      {currentStep !== 'COMPLETE' && (
+        <div className="flex flex-col-reverse sm:flex-row sm:items-center justify-between gap-3 border-t border-slate-100 pt-4">
           <button
+            type="button"
             onClick={goToPrevStep}
             disabled={currentStepIndex === 0}
-            className={`flex items-center space-x-1.5 px-4 py-2 text-xs font-extrabold rounded-xl transition ${
-              currentStepIndex > 0 ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'opacity-0 cursor-default'
+            className={`flex items-center justify-center space-x-1 px-4 py-2 text-xs font-semibold rounded-xl transition ${
+              currentStepIndex > 0 ? 'bg-slate-100 text-slate-700 hover:bg-slate-200 cursor-pointer' : 'opacity-0 pointer-events-none'
             }`}
           >
             <ChevronLeft className="w-4 h-4" />
             <span>Previous</span>
           </button>
 
-          {currentStep !== 'COMPLETE' && (
-            <button
-              onClick={goToNextStep}
-              className="flex items-center space-x-2 px-6 py-3 bg-gradient-to-r from-pink-400 to-purple-400 hover:from-pink-500 hover:to-purple-500 text-white font-black text-xs rounded-xl transition shadow-md shadow-pink-200 transform hover:scale-105 cursor-pointer"
-            >
-              <span>Continue Journey</span>
-              <ChevronRight className="w-4 h-4" />
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={goToNextStep}
+            disabled={!isStepComplete()}
+            className={`flex items-center justify-center space-x-1.5 px-6 py-2.5 font-bold text-xs sm:text-sm rounded-xl transition shadow-xs ${
+              isStepComplete()
+                ? 'bg-sky-600 hover:bg-sky-700 text-white cursor-pointer active:scale-95'
+                : 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
+            }`}
+          >
+            <span>{isStepComplete() ? 'Continue' : 'Complete step action to proceed'}</span>
+            <ChevronRight className="w-4 h-4" />
+          </button>
         </div>
-      </div>
+      )}
     </div>
   );
 };
@@ -688,7 +838,7 @@ export const SpeechClarityActivityDefinition: RegisteredActivityDefinition<Speec
   activity: {
     activity_id: 'act_speech_clarity_01',
     activity_version_id: '1.0.0',
-    title: 'Speech Clarity & Articulation Journey',
+    title: "Let's Practice the R Sound",
     short_description: 'Continuous 9-step guided practice experience moving from sound hearing, discrimination, isolation, word, position, phrase, recording, and self-review.',
     service: 'speech_therapy',
     target_skill: 'Speech Sound Articulation & Auditory Discrimination',

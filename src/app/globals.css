@@ -19,6 +19,14 @@ body {
   overflow-x: hidden;
 }
 
+/* Hide Next.js dev indicator badge completely */
+nextjs-portal,
+[data-nextjs-toast],
+[data-nextjs-dialog-overlay],
+[data-next-badge] {
+  display: none !important;
+}
+
 /* Custom Playful Pastel Animations */
 @keyframes bounce-subtle {
   0%, 100% { transform: translateY(0); }

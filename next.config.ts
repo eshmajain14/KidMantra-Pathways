@@ -1,7 +1,15 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  devIndicators: false,
+  async rewrites() {
+    return [
+      {
+        source: '/task/:path*',
+        destination: '/'
+      }
+    ];
+  }
 };
 
 export default nextConfig;
